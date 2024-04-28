@@ -7,6 +7,7 @@ Each callback inherits from the :class:`.Callback` base class. See detailed desc
 examples for writing your own callbacks at the :class:`.Callback` base class.
 """
 from composer.callbacks.activation_monitor import ActivationMonitor
+from composer.callbacks.mup_monitor import MupMonitor
 from composer.callbacks.checkpoint_saver import CheckpointSaver
 from composer.callbacks.early_stopper import EarlyStopper
 from composer.callbacks.eval_output_logging_callback import EvalOutputLogging
@@ -46,4 +47,5 @@ __all__ = [
     'FreeOutputs',
     'MemorySnapshot',
     'OOMObserver',
+    'MupMonitor'
 ]

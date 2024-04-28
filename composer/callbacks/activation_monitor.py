@@ -88,12 +88,10 @@ class ActivationMonitor(Callback):
             in partcular for larger models as this callback logs a lot. Default: 'True'.
     """
 
-    def __init__(
-        self,
-        interval: Union[int, str, Time] = '25ba',
-        ignore_module_types: Optional[List[str]] = None,
-        only_log_wandb: bool = True,
-    ):
+    def __init__(self,
+                 interval: Union[int, str, Time] = '25ba',
+                 ignore_module_types: Optional[List[str]] = None,
+                 only_log_wandb: bool = True):
         self.ignore_module_types = ignore_module_types
         self.only_log_wandb = only_log_wandb
 
@@ -103,19 +101,15 @@ class ActivationMonitor(Callback):
         self.interval = Time.from_input(interval, TimeUnit.BATCH)
 
         if self.interval.unit == TimeUnit.BATCH and self.interval < Time.from_timestring('10ba'):
-            warnings.warn(
-                f'Currently the ActivationMonitor`s interval is set to {self.interval} '
-                f'which is below our recommended value of 10ba. We recommend you raise '
-                f'the interval to at least 10ba, as the activation monitor adds extra overhead '
-                f'and decreases throughput.',
-            )
+            warnings.warn(f'Currently the ActivationMonitor`s interval is set to {self.interval} '
+                          f'which is below our recommended value of 10ba. We recommend you raise '
+                          f'the interval to at least 10ba, as the activation monitor adds extra overhead '
+                          f'and decreases throughput.')
 
         # Verify that the interval has supported units
         if self.interval.unit not in [TimeUnit.BATCH, TimeUnit.EPOCH]:
-            raise ValueError(
-                f'Invalid time unit for parameter interval: '
-                f'{self.interval.unit}',
-            )
+            raise ValueError(f'Invalid time unit for parameter interval: '
+                             f'{self.interval.unit}')
 
         self.last_train_time_value_logged = -1
         self.module_names = {}
@@ -152,14 +146,8 @@ class ActivationMonitor(Callback):
     def _register_forward_hook(self, logger: Logger, step: Optional[int], module: torch.nn.Module):
         self.handles.append(module.register_forward_hook(partial(self.forward_hook, logger, step)))
 
-    def forward_hook(
-        self,
-        logger: Logger,
-        step: Optional[int],
-        module: torch.nn.Module,
-        input: Optional[Sequence],
-        output: Optional[Sequence],
-    ):
+    def forward_hook(self, logger: Logger, step: Optional[int], module: torch.nn.Module, input: Optional[Sequence],
+                     output: Optional[Sequence]):
         module_name = self.module_names[module]
 
         if self.ignore_module_types is not None:
@@ -178,13 +166,37 @@ class ActivationMonitor(Callback):
                     self.recursively_add_metrics(metrics, module_name, f'_input.{i}', val)
 
         if output is not None:
-            for i, val in enumerate(output):
-                if val is None or isinstance(val, dict):
-                    continue
-                if isinstance(val, str) and isinstance(output, dict):
-                    self.recursively_add_metrics(metrics, module_name, f'_output.{i}', output[val])  # type: ignore
+            if isinstance(output, str):
+                return
+            if isinstance(output, Sequence):
+                if len(output) > 1:
+                    print(f'Len output for {module_name}: ', len(output))
+                    val = [v for v in output if v is not None]
+                    if len(val) > 1:
+                        print('Len val: ', len(val))
+                        print('Type val[0]', type(val[0]))
+                        print('Type val[1]', type(val[1]))
+                        print('Shape val[0]', val[0].shape)
+                        print('Shape val[1]', val[1].shape)
+                    else:
+                        val = torch.cat(val, 0)
+                        self.add_metrics(metrics, module_name, f'_output_single_concat', val)
                 else:
-                    self.recursively_add_metrics(metrics, module_name, f'_output.{i}', val)
+                    raise ValueError(f'Invalid output length: {len(output)}')
+            # for i, val in enumerate(output):
+            #     if val is None or isinstance(val, dict):
+            #         continue
+            #     if isinstance(val, str) and isinstance(output, dict):
+            #         self.recursively_add_metrics(metrics, module_name, f'_output.{i}', output[val])  # type: ignore
+            #     else:
+            #         self.recursively_add_metrics(metrics, module_name, f'_output.{i}', val)
+            else:
+                if isinstance(output, torch.Tensor):
+                    print('Shape single output: ', output.shape)
+                    self.add_metrics(metrics, module_name, f'_output_single', output)
+                else:
+                    print(f'Invalid output type: {type(output)}')
+
 
         if self.only_log_wandb:
             wandb_loggers = [ld for ld in logger.destinations if isinstance(ld, WandBLogger)]
@@ -212,15 +224,17 @@ class ActivationMonitor(Callback):
 
     def add_metrics(self, metrics: dict, name: str, suffix: str, value: torch.Tensor):
         # We shouldn't log booleans
-        if value.dtype == torch.bool:
+        # if value.dtype == torch.bool:
+        if isinstance(value, bool):
             return
         if value.is_floating_point() or value.is_complex():
-            metrics[f'activations/l2_norm/{name}{suffix}'] = torch.linalg.vector_norm(value, dim=-1).mean().item()
-            metrics[f'activations/average/{name}{suffix}'] = value.mean().item()
-            metrics[f'activations/kurtosis/{name}{suffix}'] = compute_kurtosis(value).item()
+            # metrics[f'activations/l2_norm/{name}{suffix}'] = torch.linalg.vector_norm(value, dim=-1).mean().item()
+            metrics[f'activations/l1_norm/{name}{suffix}'] = value.abs().mean().item()
+            # metrics[f'activations/average/{name}{suffix}'] = value.mean().item()
+            # metrics[f'activations/kurtosis/{name}{suffix}'] = compute_kurtosis(value).item()
 
-            # Because we call max with `dim=-1` we need to call .values to get the actual values
-            metrics[f'activations/max/{name}{suffix}'] = value.max(dim=-1).values.mean().item()
+            # # Because we call max with `dim=-1` we need to call .values to get the actual values
+            # metrics[f'activations/max/{name}{suffix}'] = value.max(dim=-1).values.mean().item()
 
     def create_module_names(self, model: torch.nn.Module):
         self.module_names = {m: name for name, m in model.named_modules()}
