@@ -11,12 +11,15 @@ be configured using arbitrary but explicit time units.
 See :class:`~.ComposerScheduler` for more information on stateless schedulers.
 """
 
+import bisect
+import copy
 import inspect
+import itertools
 import logging
 import math
 import textwrap
 import warnings
-from typing import TYPE_CHECKING, Union
+from typing import List, TYPE_CHECKING, Union
 
 from torch.optim.lr_scheduler import LambdaLR, LRScheduler
 
@@ -950,3 +953,134 @@ class PolynomialWithWarmupScheduler(ComposerScheduler):
         coeff = (1 - frac_of_total)**self.power
         current_factor = self.alpha_f + coeff * (1.0 - self.alpha_f)
         return current_factor
+
+
+class SequentialScheduler(ComposerScheduler):
+    r"""Switch through a list of schedulers at given milestones in time.
+
+    This scheduler is based on  :class:`~torch.optim.lr_scheduler.SequentialLR` from PyTorch.
+
+    Args:
+        schedulers (List[ComposerScheduler]): Learning rate schedulers to switch through.
+        milestones (List[str | Time]): Time points at which to switch to the next learning rate schedule.
+    """
+
+    def __init__(
+            self,
+            schedulers: List[ComposerScheduler],
+            milestones: List[Union[str, Time]],
+    ) -> None:
+        self.schedulers = schedulers
+        assert all(
+            isinstance(m, Time) and m.unit == TimeUnit.ITERATION
+            for m in milestones
+        ), 'currently only milestones in the iterations time unit are supported'
+        self.milestones = milestones
+
+    def __call__(self, state: State, ssr: float = 1.0) -> float:
+        milestones = [
+            _convert_time(milestone, state, ssr=ssr)
+            for milestone in self.milestones
+        ]
+
+        idx = bisect.bisect_right(milestones, state.timestamp)
+        scheduler = self.schedulers[idx]
+
+        # Subtract from the state we pass to the selected scheduler so
+        # it looks like it's starting from zero again.
+        time_adjusted_state = state
+        if idx > 0:
+            # Make a copy so we don't modify the initial state (but we
+            # don't need a deep copy).
+            time_adjusted_state = copy.copy(time_adjusted_state)
+            prev_time = milestones[idx - 1]
+
+            # TODO It may be wrong to only adjust the iteration here
+            #      (depends on the sub-schedulers).
+            # TODO This would need to be adjusted to support milestones
+            #      in other time units.
+            new_iteration = (
+                time_adjusted_state.timestamp.get(prev_time.unit)
+                - prev_time
+            )
+            time_adjusted_state.timestamp = time_adjusted_state.timestamp.copy(
+                iteration=new_iteration,
+            )
+
+        return scheduler(time_adjusted_state, ssr)
+
+
+class ConstantDecayWithWarmupScheduler(ComposerScheduler):
+    r"""Maintains a WSD learning rate schedule consisting of four phases. First, warmup from an
+    initial to a constant learning rate is done, then follows a constant phase, then a decay phase
+    to the final value which will be held constant again after the decay phase.
+
+    Args:
+        t_warmup (str | Time): Warmup time.
+        t_constant (str | Time): Constant time. This is not the step at which to start/end the
+            constant phase, but the duration that the scheduler is in its constant phase.
+        t_decay (str | Time): Decay time. This is not the step at which to start/end decay, but the
+            duration that the scheduler is in its decay phase.
+        alpha_i (float): Initial learning rate multiplier. Default = ``0.0``.
+        alpha_c (float): Constant learning rate multiplier (after warmup). Default = ``1.0``.
+        alpha_f (float): Final learning rate multiplier (after decay). Default = ``0.0``.
+        t_max (str | Time): Duration of this scheduler. Default = ``"1dur"``.
+    """
+
+    def __init__(
+        self,
+        t_warmup: Union[str, Time],
+        t_constant: Union[str, Time],
+        t_decay: Union[str, Time],
+        alpha_i: float = 0.0,
+        alpha_c: float = 1.0,
+        alpha_f: float = 0.0,
+        t_max: Union[str, Time] = '1dur',
+    ) -> None:
+        assert all(
+            Time.from_input(m).unit == TimeUnit.ITERATION
+            for m in (t_warmup, t_constant, t_decay)
+        ), 'currently only phases in the iterations time unit are supported'
+
+        self.t_warmup = t_warmup
+        self.t_constant = t_constant
+        self.t_decay = t_decay
+        self.alpha_i = alpha_i
+        self.alpha_c = alpha_c
+        self.alpha_f = alpha_f
+        self.t_max = t_max
+
+        warmup_scheduler = LinearScheduler(
+            alpha_i=alpha_i,
+            alpha_f=alpha_c,
+            t_max=t_warmup,
+        )
+        constant_scheduler = ConstantScheduler(
+            alpha=alpha_c,
+            t_max=t_constant,
+        )
+        decay_scheduler = LinearScheduler(
+            alpha_i=alpha_c,
+            alpha_f=alpha_f,
+            t_max=t_decay,
+        )
+        after_decay_scheduler = ConstantScheduler(
+            alpha=alpha_f,
+            t_max=t_max,
+        )
+
+        schedulers = [
+            warmup_scheduler,
+            constant_scheduler,
+            decay_scheduler,
+            after_decay_scheduler,
+        ]
+        milestones = list(itertools.accumulate(map(Time.from_input, [
+            t_warmup,
+            t_constant,
+            t_decay,
+        ])))
+        self.scheduler = SequentialScheduler(schedulers, milestones)
+
+    def __call__(self, state: State, ssr: float = 1.0) -> float:
+        return self.scheduler(state, ssr)
