@@ -37,7 +37,7 @@ import io
 import logging
 import os
 import pickle
-import random
+import secrets
 import string
 import sys
 import time
@@ -623,7 +623,7 @@ def get_sampler(
     )
 
 
-def get_node_signal_file_name(rng: Optional[random.Random] = None) -> str:
+def get_node_signal_file_name(k: int = 6) -> str:
     """Returns a file name to use for a file based wait within a node.
 
     The file name will contain a randomly generated string to avoid conflicts.
@@ -632,10 +632,10 @@ def get_node_signal_file_name(rng: Optional[random.Random] = None) -> str:
     Returns:
         str: The name of the file that will be created to signal the end of a node's training.
     """
-    if rng is None:
-        rng = random.Random()
-
-    random_string = ''.join(rng.choices(string.ascii_letters + string.digits, k=6))
+    random_string = ''.join(
+        secrets.choice(string.ascii_letters + string.digits)
+        for _ in range(k)
+    )
     # We assume all local world sizes are the same.
     num_nodes = get_world_size() // get_local_world_size()
     node_ranks = list(range(num_nodes))
