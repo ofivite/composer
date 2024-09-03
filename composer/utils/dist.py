@@ -636,10 +636,15 @@ def get_node_signal_file_name(rng: Optional[random.Random] = None) -> str:
         rng = random.Random()
 
     random_string = ''.join(rng.choices(string.ascii_letters + string.digits, k=6))
-    node_rank = get_node_rank()
-    file_name_list = [f'._signal_file_node{node_rank}_{random_string}']
+    # We assume all local world sizes are the same.
+    num_nodes = get_world_size() // get_local_world_size()
+    node_ranks = list(range(num_nodes))
+    file_name_list = [
+        f'._signal_file_node{node_rank}_{random_string}'
+        for node_rank in node_ranks
+    ]
     broadcast_object_list(file_name_list, src=0)
-    return file_name_list[0]
+    return file_name_list[get_node_rank()]
 
 
 def write_signal_file(signal_file_name: str, dir_path: Optional[str] = None) -> str:
