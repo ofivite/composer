@@ -972,9 +972,9 @@ class SequentialScheduler(ComposerScheduler):
     ) -> None:
         self.schedulers = schedulers
         assert all(
-            isinstance(m, Time) and m.unit == TimeUnit.ITERATION
+            isinstance(m, Time) and m.unit == TimeUnit.BATCH
             for m in milestones
-        ), 'currently only milestones in the iterations time unit are supported'
+        ), 'currently only milestones in the batch time unit are supported'
         self.milestones = milestones
 
     def __call__(self, state: State, ssr: float = 1.0) -> float:
@@ -995,16 +995,16 @@ class SequentialScheduler(ComposerScheduler):
             time_adjusted_state = copy.copy(time_adjusted_state)
             prev_time = milestones[idx - 1]
 
-            # TODO It may be wrong to only adjust the iteration here
+            # TODO It may be wrong to only adjust the batch number here
             #      (depends on the sub-schedulers).
             # TODO This would need to be adjusted to support milestones
             #      in other time units.
-            new_iteration = (
+            new_batch = (
                 time_adjusted_state.timestamp.get(prev_time.unit)
                 - prev_time
             )
             time_adjusted_state.timestamp = time_adjusted_state.timestamp.copy(
-                iteration=new_iteration,
+                batch=new_batch,
             )
 
         return scheduler(time_adjusted_state, ssr)
@@ -1038,9 +1038,9 @@ class ConstantDecayWithWarmupScheduler(ComposerScheduler):
         t_max: Union[str, Time] = '1dur',
     ) -> None:
         assert all(
-            Time.from_input(m).unit == TimeUnit.ITERATION
+            Time.from_input(m).unit == TimeUnit.BATCH
             for m in (t_warmup, t_constant, t_decay)
-        ), 'currently only phases in the iterations time unit are supported'
+        ), 'currently only phases in the batch time unit are supported'
 
         self.t_warmup = t_warmup
         self.t_constant = t_constant
